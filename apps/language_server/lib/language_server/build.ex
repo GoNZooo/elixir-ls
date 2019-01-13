@@ -3,34 +3,29 @@ defmodule ElixirLS.LanguageServer.Build do
   require Logger
 
   def build(parent, root_path, fetch_deps?) do
-    if Path.absname(File.cwd!()) != Path.absname(root_path) do
-      IO.puts("Skipping build because cwd changed from #{root_path} to #{File.cwd!()}")
-      {nil, nil}
-    else
-      spawn_monitor(fn ->
-        with_build_lock(fn ->
-          {us, _} =
-            :timer.tc(fn ->
-              IO.puts("Compiling with Mix env #{Mix.env()}")
+    spawn_monitor(fn ->
+      with_build_lock(fn ->
+        {us, _} =
+          :timer.tc(fn ->
+            IO.puts("Compiling with Mix env #{Mix.env()}")
 
-              prev_deps = Mix.Dep.loaded([])
-              clear_deps_cache()
+            prev_deps = Mix.Dep.loaded([])
+            clear_deps_cache()
 
-              case reload_project() do
-                {:ok, mixfile_diagnostics} ->
-                  if fetch_deps? and Mix.Dep.loaded([]) != prev_deps, do: fetch_deps()
-                  {status, diagnostics} = compile()
-                  Server.build_finished(parent, {status, mixfile_diagnostics ++ diagnostics})
+            case reload_project() do
+              {:ok, mixfile_diagnostics} ->
+                if fetch_deps? and Mix.Dep.loaded([]) != prev_deps, do: fetch_deps()
+                {status, diagnostics} = compile()
+                Server.build_finished(parent, {status, mixfile_diagnostics ++ diagnostics})
 
-                {:error, mixfile_diagnostics} ->
-                  Server.build_finished(parent, {:error, mixfile_diagnostics})
-              end
-            end)
+              {:error, mixfile_diagnostics} ->
+                Server.build_finished(parent, {:error, mixfile_diagnostics})
+            end
+          end)
 
-          JsonRpc.log_message(:info, "Compile took #{div(us, 1000)} milliseconds")
-        end)
+        JsonRpc.log_message(:info, "Compile took #{div(us, 1000)} milliseconds")
       end)
-    end
+    end)
   end
 
   def publish_file_diagnostics(uri, all_diagnostics, source_file) do

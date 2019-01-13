@@ -74,11 +74,12 @@ defmodule ElixirLS.LanguageServer.Protocol do
     end
   end
 
-  defmacro initialize_req(id, root_uri, client_capabilities) do
+  defmacro initialize_req(id, root_uri, client_capabilities, initialization_options) do
     quote do
       request(unquote(id), "initialize", %{
         "capabilities" => unquote(client_capabilities),
-        "rootUri" => unquote(root_uri)
+        "rootUri" => unquote(root_uri),
+        "initializationOptions" => unquote(initialization_options)
       })
     end
   end

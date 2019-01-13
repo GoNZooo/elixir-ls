@@ -41,6 +41,7 @@ defmodule ElixirLS.LanguageServer.Server do
     :root_uri,
     :project_dir,
     :settings,
+    :platform,
     build_diagnostics: [],
     dialyzer_diagnostics: [],
     needs_build?: false,
@@ -49,9 +50,11 @@ defmodule ElixirLS.LanguageServer.Server do
     received_shutdown?: false,
     requests: %{},
     source_files: %{},
-    awaiting_contracts: []
+    awaiting_contracts: [],
+    dockerized?: false
   ]
 
+  @windows_linked_disk_prefixes ["/c"]
   ## Client API
 
   def start_link(name \\ nil) do
@@ -82,6 +85,27 @@ defmodule ElixirLS.LanguageServer.Server do
 
   def init(:ok) do
     {:ok, %__MODULE__{}}
+  end
+
+  def handle_call(
+        {:request_finished, id, result},
+        _from,
+        %__MODULE__{dockerized?: true, platform: "win32"} = state
+      ) do
+    case result do
+      {:error, type, msg} ->
+        JsonRpc.respond_with_error(id, type, msg)
+
+      {:ok, result} when is_list(result) ->
+        JsonRpc.respond(id, Enum.map(result, &maybe_fix_uri/1))
+
+      {:ok, result} ->
+        result = maybe_fix_uri(result)
+        JsonRpc.respond(id, result)
+    end
+
+    state = %{state | requests: Map.delete(state.requests, id)}
+    {:reply, :ok, state}
   end
 
   def handle_call({:request_finished, id, result}, _from, state) do
@@ -290,7 +314,10 @@ defmodule ElixirLS.LanguageServer.Server do
     state
   end
 
-  defp handle_request(initialize_req(_id, root_uri, client_capabilities), state) do
+  defp handle_request(
+         initialize_req(_id, root_uri, client_capabilities, initialization_options),
+         state
+       ) do
     show_version_warnings()
 
     state =
@@ -304,7 +331,12 @@ defmodule ElixirLS.LanguageServer.Server do
           state
       end
 
-    state = %{state | client_capabilities: client_capabilities}
+    state = %{
+      state
+      | client_capabilities: client_capabilities,
+        platform: Map.get(initialization_options, "platform"),
+        dockerized?: Map.get(initialization_options, "dockerize")
+    }
 
     # If we don't receive workspace/didChangeConfiguration for 5 seconds, use default settings
     Process.send_after(self(), :default_config, 5000)
@@ -647,4 +679,15 @@ defmodule ElixirLS.LanguageServer.Server do
   defp set_project_dir(state, _) do
     state
   end
+
+  defp maybe_fix_uri(
+         %{"uri" => "file://" <> <<disk_prefix::binary()-size(2), "/", file_uri::binary()>>} =
+           result
+       )
+       when disk_prefix in @windows_linked_disk_prefixes do
+    modified_file_uri = "file://" <> disk_prefix <> ":/" <> file_uri
+    Map.put(result, "uri", modified_file_uri)
+  end
+
+  defp maybe_fix_uri(result), do: result
 end

@@ -27,6 +27,27 @@ defmodule ElixirLS.LanguageServer.Providers.Formatting do
     end
   end
 
+  def format(source_file, uri, project_dir, current_dir) do
+    if can_format?(uri, project_dir, current_dir) do
+      file = SourceFile.path_from_uri(uri) |> Path.relative_to(project_dir)
+      opts = formatter_opts(file, project_dir)
+      formatted = IO.iodata_to_binary([Code.format_string!(source_file.text, opts), ?\n])
+
+      response =
+        source_file.text
+        |> String.myers_difference(formatted)
+        |> myers_diff_to_text_edits()
+
+      {:ok, response}
+    else
+      msg =
+        "Cannot format file from current directory " <>
+          "(Currently in #{Path.relative_to(File.cwd!(), project_dir)})"
+
+      {:error, :internal_error, msg}
+    end
+  end
+
   # If in an umbrella project, the cwd might be set to a sub-app if it's being compiled. This is
   # fine if the file we're trying to format is in that app. Otherwise, we return an error.
   defp can_format?(file_uri, project_dir) do
@@ -34,6 +55,20 @@ defmodule ElixirLS.LanguageServer.Providers.Formatting do
 
     is_nil(project_dir) or not String.starts_with?(file_path, project_dir) or
       String.starts_with?(Path.absname(file_path), File.cwd!())
+  end
+
+  defp can_format?(file_uri, project_dir, current_dir) do
+    file_path = SourceFile.path_from_uri(file_uri)
+
+    no_project_dir? = is_nil(project_dir)
+    file_path_does_not_start_with_project_dir? = not String.starts_with?(file_path, project_dir)
+    file_path_absname = Path.absname(file_path)
+
+    file_path_absname_starts_with_current_dir? =
+      String.starts_with?(file_path_absname, current_dir)
+
+    no_project_dir? or file_path_does_not_start_with_project_dir? or
+      file_path_absname_starts_with_current_dir?
   end
 
   defp formatter_opts(for_file, project_dir) do

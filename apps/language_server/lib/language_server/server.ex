@@ -402,8 +402,27 @@ defmodule ElixirLS.LanguageServer.Server do
     {:async, fun, state}
   end
 
+  defp handle_request(
+         formatting_req(_id, uri, _options),
+         %__MODULE__{
+           dockerized?: true,
+           platform: "win32",
+           project_dir: project_dir,
+           source_files: source_files
+         } = state
+       ) do
+    fun = fn ->
+      Formatting.format(source_files[uri], uri, project_dir, maybe_fix_path(File.cwd!()))
+    end
+
+    {:async, fun, state}
+  end
+
   defp handle_request(formatting_req(_id, uri, _options), state) do
-    fun = fn -> Formatting.format(state.source_files[uri], uri, state.project_dir) end
+    fun = fn ->
+      Formatting.format(state.source_files[uri], uri, state.project_dir)
+    end
+
     {:async, fun, state}
   end
 
@@ -678,6 +697,18 @@ defmodule ElixirLS.LanguageServer.Server do
 
   defp set_project_dir(state, _) do
     state
+  end
+
+  defp maybe_fix_path(<<disk_prefix::binary()-size(2), "/", file_uri::binary()>>)
+       when disk_prefix in @windows_linked_disk_prefixes do
+    disk_prefix <> ":/" <> file_uri
+  end
+
+  defp maybe_fix_path(other_path), do: other_path
+
+  defp maybe_fix_uri("file://" <> <<disk_prefix::binary()-size(2), "/", file_uri::binary()>>)
+       when disk_prefix in @windows_linked_disk_prefixes do
+    "file://" <> disk_prefix <> ":/" <> file_uri
   end
 
   defp maybe_fix_uri(

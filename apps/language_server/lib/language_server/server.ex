@@ -51,10 +51,12 @@ defmodule ElixirLS.LanguageServer.Server do
     requests: %{},
     source_files: %{},
     awaiting_contracts: [],
-    dockerized?: false
+    dockerized?: false,
+    elixir_root_dir: ""
   ]
 
   @windows_linked_disk_prefixes ["/c"]
+  @dockerized_elixir_root_prefix "file:///usr/local/src/elixir/lib"
   ## Client API
 
   def start_link(name \\ nil) do
@@ -90,17 +92,18 @@ defmodule ElixirLS.LanguageServer.Server do
   def handle_call(
         {:request_finished, id, result},
         _from,
-        %__MODULE__{dockerized?: true, platform: "win32"} = state
+        %__MODULE__{dockerized?: true, platform: "win32", elixir_root_dir: elixir_root_dir} =
+          state
       ) do
     case result do
       {:error, type, msg} ->
         JsonRpc.respond_with_error(id, type, msg)
 
       {:ok, result} when is_list(result) ->
-        JsonRpc.respond(id, Enum.map(result, &maybe_fix_uri/1))
+        JsonRpc.respond(id, Enum.map(result, &maybe_fix_uri(&1, elixir_root_dir)))
 
       {:ok, result} ->
-        result = maybe_fix_uri(result)
+        result = maybe_fix_uri(result, elixir_root_dir)
         JsonRpc.respond(id, result)
     end
 
@@ -335,7 +338,8 @@ defmodule ElixirLS.LanguageServer.Server do
       state
       | client_capabilities: client_capabilities,
         platform: Map.get(initialization_options, "platform"),
-        dockerized?: Map.get(initialization_options, "dockerize")
+        dockerized?: Map.get(initialization_options, "dockerize"),
+        elixir_root_dir: Map.get(initialization_options, "elixirRootDir")
     }
 
     # If we don't receive workspace/didChangeConfiguration for 5 seconds, use default settings
@@ -706,19 +710,41 @@ defmodule ElixirLS.LanguageServer.Server do
 
   defp maybe_fix_path(other_path), do: other_path
 
-  defp maybe_fix_uri("file://" <> <<disk_prefix::binary()-size(2), "/", file_uri::binary()>>)
+  defp maybe_fix_uri(
+         "file://" <> <<disk_prefix::binary()-size(2), "/", file_uri::binary()>>,
+         _elixir_root_dir
+       )
        when disk_prefix in @windows_linked_disk_prefixes do
     "file://" <> disk_prefix <> ":/" <> file_uri
   end
 
   defp maybe_fix_uri(
          %{"uri" => "file://" <> <<disk_prefix::binary()-size(2), "/", file_uri::binary()>>} =
-           result
+           result,
+         _elixir_root_dir
        )
        when disk_prefix in @windows_linked_disk_prefixes do
     modified_file_uri = "file://" <> disk_prefix <> ":/" <> file_uri
     Map.put(result, "uri", modified_file_uri)
   end
 
-  defp maybe_fix_uri(result), do: result
+  # {:request_finished, 19,
+  #  {:ok,
+  #   %{
+  #     "range" => %{
+  #       "end" => %{"character" => 6, "line" => 1863},
+  #       "start" => %{"character" => 6, "line" => 1863}
+  #     },
+  #     "uri" => "file:///usr/local/src/elixir/lib/elixir/lib/enum.ex"
+  #   }}}
+
+  defp maybe_fix_uri(
+         %{"uri" => @dockerized_elixir_root_prefix <> rest_of_uri} = result,
+         elixir_root_dir
+       ) do
+    modified_file_uri = "file://" <> elixir_root_dir <> rest_of_uri
+    Map.put(result, "uri", modified_file_uri)
+  end
+
+  defp maybe_fix_uri(result, _elixir_root_dir), do: result
 end
